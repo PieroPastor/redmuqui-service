@@ -13,7 +13,15 @@ Todas las variables sensibles se leen de variables de entorno (ver .env.example)
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Carga las variables de BASE_DIR/.env al entorno (si el archivo existe).
+# No sobreescribe variables que ya estén definidas en el entorno real
+# (override=False), así que en systemd con EnvironmentFile=.env esto no
+# causa conflicto.
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 def env_bool(nombre: str, default: bool = False) -> bool:
@@ -32,12 +40,16 @@ DEBUG = env_bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()]
 
 INSTALLED_APPS = [
+    "corsheaders",
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "processor",
 ]
 
-MIDDLEWARE = []
+MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.common.CommonMiddleware",
+]
 
 ROOT_URLCONF = "redmuqui_ocr.urls"
 
@@ -89,16 +101,21 @@ OCR_DESCRIPCION_RESULTADO = os.environ.get(
     "PDF generado automáticamente por OCR a partir del archivo original.",
 )
 
-# --- Webhook (push desde Spring Boot) ------------------------------------------
+# --- CORS (el frontend llama directamente a este servicio desde el navegador) ---
 
-# Si se configura, el webhook exige este valor en el header
-# X-OCR-Webhook-Token. Debe coincidir con `ocr.webhook.token` en el backend.
-OCR_WEBHOOK_TOKEN = os.environ.get("OCR_WEBHOOK_TOKEN", "")
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get("OCR_CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+# Para desarrollo local rápido, si no se configura nada, permite localhost:3000.
+if not CORS_ALLOWED_ORIGINS and env_bool("DJANGO_DEBUG", default=False):
+    CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
 
 # --- Poller de respaldo -----------------------------------------------------
 
-# Segundos entre cada revisión de respaldo del bucket (el flujo "rápido" es
-# el webhook; esto solo atrapa lo que el webhook no haya notificado).
+# Segundos entre cada revisión de respaldo del bucket (la vía "rápida" es la
+# llamada directa del frontend a /api/procesar-archivo/; esto solo atrapa lo
+# que esa llamada no haya alcanzado a notificar, p.ej. si el usuario cerró la
+# pestaña antes de que terminara el fetch).
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "300"))
 
 # Carpeta temporal donde se descargan y procesan los archivos.

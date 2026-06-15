@@ -28,8 +28,22 @@ class BackendAuthError(Exception):
 
 
 class SpringBackendClient:
-    def __init__(self):
-        self._access_token: str | None = None
+    def __init__(self, authorization=None):
+        self.authorization = authorization
+        self._access_token = None
+
+    def _headers(self):
+        if self.authorization:
+            return {
+                "Authorization": self.authorization
+            }
+
+        if not self._access_token:
+            self._login()
+
+        return {
+            "Authorization": f"Bearer {self._access_token}"
+        }
 
     def _login(self) -> None:
         url = f"{settings.SPRING_BACKEND_URL}/api/v1/auth/login"
@@ -52,10 +66,37 @@ class SpringBackendClient:
         data = resp.json()
         self._access_token = data["accessToken"]
 
-    def _headers(self) -> dict:
-        if not self._access_token:
-            self._login()
-        return {"Authorization": f"Bearer {self._access_token}"}
+    def listar_archivos(self, documento_id: int) -> list[dict]:
+        """GET /api/v1/documentos/{id}/archivos -> lista de ArchivoDTO."""
+        url = f"{settings.SPRING_BACKEND_URL}/api/v1/documentos/{documento_id}/archivos"
+
+        for intento in range(2):
+            headers = self._headers()
+            resp = requests.get(url, headers=headers, timeout=60)
+
+            if resp.status_code == 401 and intento == 0:
+                logger.info("Token expirado/inválido, reautenticando...")
+                self._access_token = None
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+
+        resp.raise_for_status()
+        return resp.json()
+
+    def archivo_existe(self, documento_id: int, archivo_id: int, url_s3: str) -> bool:
+        """
+        Verifica (contra el backend, con el usuario de servicio) que el
+        documento `documento_id` tenga un Archivo con id `archivo_id` y la
+        misma `url`. Evita que cualquiera, llamando directamente a este
+        endpoint desde el navegador, pueda hacer que Django procese y
+        adjunte archivos arbitrarios a documentos ajenos.
+        """
+        for archivo in self.listar_archivos(documento_id):
+            if archivo.get("id") == archivo_id and archivo.get("url") == url_s3:
+                return True
+        return False
 
     def subir_pdf_resultado(self, documento_id: int, pdf_path: Path, descripcion: str) -> dict:
         """
